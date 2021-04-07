@@ -8,6 +8,12 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader as dataloader
 import torchvision.datasets as datasets
 
+if torch.cuda.is_available():
+    torch.cuda.set_device(0)
+    device = "cuda"
+else:
+    device = "cpu"
+
 from sklearn.metrics import roc_auc_score
 
 from models.allconv import AllConvNet
@@ -70,14 +76,79 @@ def main():
     num_classes = 10
     model = WideResNet(args.layers, num_classes, args.widen_factor, dropRate=args.droprate)
     model.rot_head = nn.Linear(128, 4)
-    model = model.cuda()
-    model.load_state_dict(torch.load('./models/trained_model_{}.pth'.format(args.method)))
+    model = model.to(device)
+    model.load_state_dict(torch.load('./models/trained_model_{}.pth'.format(args.method), map_location = device))
 
-    TODO:
-    # 1. calculate ood score by two methods(MSP, Rot)
+    # TODO:
+    ## 1. calculate ood score by two methods(MSP, Rot)
+    id_testdata_score, ood_testdata_score = [], []
 
-    # 2. calculate AUROC by using ood scores 
-    
+    for x_tf_0, x_tf_90, x_tf_180, x_tf_270, batch_y in tqdm(id_test_loader):
+        batch_size = x_tf_0.shape[0]
+        batch_x = torch.cat([x_tf_0, x_tf_90, x_tf_180, x_tf_270], 0).to(device)
+        batch_y = batch_y.to(device)
+        batch_rot_y = torch.cat((
+            torch.zeros(batch_size),
+            torch.ones(batch_size),
+            2 * torch.ones(batch_size),
+            3 * torch.ones(batch_size)
+        ), 0).long().to(device)
+        
+        logits, pen = model(batch_x)
+
+        classification_logits = logits[:batch_size]
+        rot_logits = model.rot_head(pen)
+
+        classification_loss = torch.max(classification_logits, dim = -1)[0]
+        lotation_loss = F.cross_entropy(rot_logits, batch_rot_y, reduce = False)
+
+        uniform_distribution = torch.zeros_like(classification_logits).fill_(1 / num_classes)
+        kl_divergence_loss = F.kl_div(input = classification_logits, target = uniform_distribution, reduce = False)
+
+        for i in range(batch_size):
+            msp_score = - classification_loss[i]
+            rot_score = - torch.sum(kl_divergence_loss[i]) + 1 / 4 * (lotation_loss[i] + lotation_loss[i + batch_size] + lotation_loss[i + 2 * batch_size] + lotation_loss[i + 3 * batch_size])
+            if args.method == 'rot':
+                score = rot_score
+            elif args.method == 'msp':
+                score = msp_score
+
+            id_testdata_score.append(score)
+
+    for x_tf_0, x_tf_90, x_tf_180, x_tf_270, batch_y in tqdm(ood_test_loader):
+        batch_size = x_tf_0.shape[0]
+        batch_x = torch.cat([x_tf_0, x_tf_90, x_tf_180, x_tf_270], 0).to(device)
+        batch_y = batch_y.to(device)
+        batch_rot_y = torch.cat((
+            torch.zeros(batch_size),
+            torch.ones(batch_size),
+            2 * torch.ones(batch_size),
+            3 * torch.ones(batch_size)
+        ), 0).long().to(device)
+        
+        logits, pen = model(batch_x)
+
+        classification_logits = logits[:batch_size]
+        rot_logits = model.rot_head(pen)
+
+        classification_loss = torch.max(classification_logits, dim = -1)[0]
+        lotation_loss = F.cross_entropy(rot_logits, batch_rot_y, reduce = False)
+
+        uniform_distribution = torch.zeros_like(classification_logits).fill_(1 / num_classes)
+        kl_divergence_loss = F.kl_div(input = classification_logits, target = uniform_distribution, reduce = False)
+
+        for i in range(batch_size):
+            msp_score = - classification_loss[i]
+            rot_score = - torch.sum(kl_divergence_loss[i]) + 1 / 4 * (lotation_loss[i] + lotation_loss[i + batch_size] + lotation_loss[i + 2 * batch_size] + lotation_loss[i + 3 * batch_size])
+            if args.method == 'rot':
+                score = rot_score
+            elif args.method == 'msp':
+                score = msp_score
+
+            ood_testdata_score.append(score)
+
+    ## 2. calculate AUROC by using ood scores
+    print(roc_auc_score(id_testdata_score, ood_testdata_score))
 
 if __name__ == "__main__":
     main()

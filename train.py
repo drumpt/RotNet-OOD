@@ -8,6 +8,13 @@ import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader as dataloader
 
+if torch.cuda.is_available():
+    torch.cuda.set_device(0)
+    device = "cuda"
+else:
+    device = "cpu"
+# print(f"Use {device} for torch")
+
 from utils import * 
 from models.allconv import AllConvNet
 from models.wrn_prime import WideResNet
@@ -47,14 +54,14 @@ def train(args, epoch, model, train_loader, optimizer, lr_scheduler):
     for x_tf_0, x_tf_90, x_tf_180, x_tf_270, batch_y in tqdm(train_loader):  
         batch_size = x_tf_0.shape[0]
 
-        batch_x = torch.cat([x_tf_0, x_tf_90, x_tf_180, x_tf_270], 0).cuda()    # batch_x: [bs*4, 3, 32, 32]
-        batch_y = batch_y.cuda()                                                # batch_y: [bs]        
-        batch_rot_y = torch.cat((                                               # batch_rot_y: [bs*4]
+        batch_x = torch.cat([x_tf_0, x_tf_90, x_tf_180, x_tf_270], 0).to(device)    # batch_x: [bs*4, 3, 32, 32]
+        batch_y = batch_y.to(device)                                                # batch_y: [bs]        
+        batch_rot_y = torch.cat((                                                   # batch_rot_y: [bs*4]
             torch.zeros(batch_size),
             torch.ones(batch_size),
             2 * torch.ones(batch_size),
             3 * torch.ones(batch_size)
-        ), 0).long().cuda()
+        ), 0).long().to(device)
 
         optimizer.zero_grad()
 
@@ -93,15 +100,15 @@ def test(args, model, test_loader):
         for x_tf_0, x_tf_90, x_tf_180, x_tf_270, batch_y in tqdm(test_loader):  
             batch_size = x_tf_0.shape[0]
 
-            batch_x = torch.cat([x_tf_0, x_tf_90, x_tf_180, x_tf_270], 0).cuda()
-            batch_y = batch_y.cuda()
+            batch_x = torch.cat([x_tf_0, x_tf_90, x_tf_180, x_tf_270], 0).to(device)
+            batch_y = batch_y.to(device)
             
             batch_rot_y = torch.cat((
                 torch.zeros(batch_size),
                 torch.ones(batch_size),
                 2 * torch.ones(batch_size),
                 3 * torch.ones(batch_size)
-            ), 0).long().cuda()
+            ), 0).long().to(device)
             
             logits, pen = model(batch_x)
             
@@ -151,7 +158,7 @@ def main():
     num_classes = 10
     model = WideResNet(args.layers, num_classes, args.widen_factor, dropRate=args.droprate)
     model.rot_head = nn.Linear(128, 4)
-    model = model.cuda()
+    model = model.to(device)
     
     # optimizer 
     optimizer = torch.optim.SGD(

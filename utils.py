@@ -7,6 +7,11 @@ import pandas as pd
 import torch
 from torch.nn import init
 
+if torch.cuda.is_available():
+    torch.cuda.set_device(0)
+    device = "cuda"
+else:
+    device = "cpu"
 
 def set_seed(seed):
     # for reproducibility. 
