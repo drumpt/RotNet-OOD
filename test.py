@@ -27,7 +27,7 @@ def arg_parser():
 
     parser.add_argument('--method', type=str, default='rot', help='rot, msp')
     parser.add_argument('--ood_dataset', type=str, default='cifar100', help='cifar100 | svhn')
-    parser.add_argument('--num_workers', type=int, default=8)
+    parser.add_argument('--num_workers', type=int, default=1)
 
     # Optimization options
     parser.add_argument('--epochs', '-e', type=int, default=100, help='Number of epochs to train.')
