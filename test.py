@@ -14,7 +14,6 @@ if torch.cuda.is_available():
     device = "cuda"
 else:
     device = "cpu"
-print(device)
 
 from sklearn.metrics import roc_auc_score
 
@@ -23,40 +22,12 @@ from models.wrn_prime import WideResNet
 from RotDataset import RotDataset
 from utils import *
 
-def arg_parser():
-    parser = argparse.ArgumentParser('argument for training')
-    parser.add_argument('--seed', type=int, default=0)
-
-    parser.add_argument('--method', type=str, default='rot', help='rot, msp')
-    parser.add_argument('--ood_dataset', type=str, default='cifar100', help='cifar100 | svhn')
-    parser.add_argument('--num_workers', type=int, default=8)
-
-    # Optimization options
-    parser.add_argument('--epochs', '-e', type=int, default=100, help='Number of epochs to train.')
-    parser.add_argument('--learning_rate', '-lr', type=float, default=0.1, help='The initial learning rate.')
-    parser.add_argument('--batch_size', '-b', type=int, default=128, help='Batch size.')
-    parser.add_argument('--test_bs', type=int, default=200)
-    parser.add_argument('--momentum', type=float, default=0.9, help='Momentum.')
-    parser.add_argument('--decay', '-d', type=float, default=0.0005, help='Weight decay (L2 penalty).')
-    parser.add_argument('--rot-loss-weight', type=float, default=0.5, help='Multiplicative factor on the rot losses')
-
-    # WRN Architecture
-    parser.add_argument('--layers', default=40, type=int, help='total number of layers')
-    parser.add_argument('--widen-factor', default=2, type=int, help='widen factor')
-    parser.add_argument('--droprate', default=0.3, type=float, help='dropout probability')
-
-    args = parser.parse_args()
-
-    return args
-
 def easy_dict():
     args = easydict.EasyDict({
         "seed": 0,
-
         "method": 'rot',
         'ood_dataset': 'cifar100',
         'num_workers': 8,
-
         'epochs': 100,
         'learning_rate': 0.1,
         'batch_size': 128,
@@ -64,7 +35,6 @@ def easy_dict():
         'momentum': 0.9,
         'decay': 0.0005,
         'rot-loss-weight': 0.5,
-
         'layers': 40,
         'widen_factor': 2,
         'droprate': 0.3
@@ -72,11 +42,7 @@ def easy_dict():
 
     return args
 
-def main():
-    # arg parser
-    # args = arg_parser()
-    args = easy_dict()
-
+def main(args):
     # set seed
     set_seed(args.seed)
     
@@ -106,72 +72,42 @@ def main():
     # TODO:
     ## 1. calculate ood score by two methods(MSP, Rot)
     model.eval()
-
     id_testdata_score, ood_testdata_score = [], []
 
-    for x_tf_0, x_tf_90, x_tf_180, x_tf_270, batch_y in tqdm(id_test_loader):
-        batch_size = x_tf_0.shape[0]
-        batch_x = torch.cat([x_tf_0, x_tf_90, x_tf_180, x_tf_270], 0).to(device)
-        batch_y = batch_y.to(device)
-        batch_rot_y = torch.cat((
-            torch.zeros(batch_size),
-            torch.ones(batch_size),
-            2 * torch.ones(batch_size),
-            3 * torch.ones(batch_size)
-        ), 0).long().to(device)
-        
-        logits, pen = model(batch_x)
+    for idx, loader in enumerate([id_test_loader, ood_test_loader]):
+        for x_tf_0, x_tf_90, x_tf_180, x_tf_270, batch_y in tqdm(loader):
+            batch_size = x_tf_0.shape[0]
+            batch_x = torch.cat([x_tf_0, x_tf_90, x_tf_180, x_tf_270], 0).to(device)
+            batch_y = batch_y.to(device)
+            batch_rot_y = torch.cat((
+                torch.zeros(batch_size),
+                torch.ones(batch_size),
+                2 * torch.ones(batch_size),
+                3 * torch.ones(batch_size)
+            ), 0).long().to(device)
+            
+            logits, pen = model(batch_x)
 
-        classification_logits = logits[:batch_size]
-        rot_logits = model.rot_head(pen)
+            classification_probabilities = F.softmax(logits[:batch_size], dim = -1)
+            rot_logits = model.rot_head(pen)
 
-        classification_loss = torch.max(classification_logits, dim = -1)[0].data
-        rotation_loss = F.cross_entropy(rot_logits, batch_rot_y, reduction = 'none').data
- 
-        uniform_distribution = torch.zeros_like(classification_logits).fill_(1 / num_classes)
-        kl_divergence_loss = nn.KLDivLoss(reduction = 'none')(classification_logits, uniform_distribution).data
+            classification_loss = torch.max(classification_probabilities, dim = -1)[0].data.cpu()
+            rotation_loss = F.cross_entropy(rot_logits, batch_rot_y, reduction = 'none').data
+    
+            uniform_distribution = torch.zeros_like(classification_probabilities).fill_(1 / num_classes)
+            kl_divergence_loss = nn.KLDivLoss(reduction = 'none')(classification_probabilities.log(), uniform_distribution).data
 
-        for i in range(batch_size):
-            msp_score = - classification_loss[i]
-            rot_score = - torch.sum(kl_divergence_loss[i]) + 1 / 4 * (rotation_loss[i] + rotation_loss[i + batch_size] + rotation_loss[i + 2 * batch_size] + rotation_loss[i + 3 * batch_size])
-            if args.method == 'msp':
-                score = msp_score
-            elif args.method == 'rot':
-                score = rot_score
+            for i in range(batch_size):
+                if args.method == 'msp':
+                    score = - classification_loss[i]
+                elif args.method == 'rot':
+                    rotation_loss_tensor = torch.tensor([rotation_loss[i], rotation_loss[i + batch_size], rotation_loss[i + 2 * batch_size], rotation_loss[i + 3 * batch_size]])
+                    score = - torch.sum(kl_divergence_loss[i]) + torch.mean(rotation_loss_tensor)
 
-            id_testdata_score.append(score)
-
-    for x_tf_0, x_tf_90, x_tf_180, x_tf_270, batch_y in tqdm(ood_test_loader):
-        batch_size = x_tf_0.shape[0]
-        batch_x = torch.cat([x_tf_0, x_tf_90, x_tf_180, x_tf_270], 0).to(device)
-        batch_y = batch_y.to(device)
-        batch_rot_y = torch.cat((
-            torch.zeros(batch_size),
-            torch.ones(batch_size),
-            2 * torch.ones(batch_size),
-            3 * torch.ones(batch_size)
-        ), 0).long().to(device)
-        
-        logits, pen = model(batch_x)
-
-        classification_logits = logits[:batch_size]
-        rot_logits = model.rot_head(pen)
-
-        classification_loss = torch.max(classification_logits, dim = -1)[0].data
-        rotation_loss = F.cross_entropy(rot_logits, batch_rot_y, reduction = 'none').data
-
-        uniform_distribution = torch.zeros_like(classification_logits).fill_(1 / num_classes)
-        kl_divergence_loss = nn.KLDivLoss(reduction = 'none')(classification_logits, uniform_distribution).data
-
-        for i in range(batch_size):
-            msp_score = - classification_loss[i]
-            rot_score = - torch.sum(kl_divergence_loss[i]) + 1 / 4 * (rotation_loss[i] + rotation_loss[i + batch_size] + rotation_loss[i + 2 * batch_size] + rotation_loss[i + 3 * batch_size])
-            if args.method == 'msp':
-                score = msp_score
-            elif args.method == 'rot':
-                score = rot_score
-
-            ood_testdata_score.append(score)
+                if idx == 0:
+                    id_testdata_score.append(score)
+                elif idx == 1:
+                    ood_testdata_score.append(score)
 
     y_true = torch.cat((
         torch.zeros(len(id_testdata_score)),
@@ -181,10 +117,28 @@ def main():
     y_score = torch.cat((
         torch.tensor(id_testdata_score),
         torch.tensor(ood_testdata_score)
-    ), 0).long()
+    ), 0).float()
 
     ## 2. calculate AUROC by using ood scores
+    print(f"dataset : {args.ood_dataset}, method : {args.method}")
     print(roc_auc_score(y_true, y_score))
 
 if __name__ == "__main__":
-    main()
+    # easy dict
+    args = easy_dict()
+
+    args.ood_dataset = "cifar100"
+    args.method = "msp"
+    main(args)
+
+    args.ood_dataset = "cifar100"
+    args.method = "rot"
+    main(args)
+
+    args.ood_dataset = "svhn"
+    args.method = "msp"
+    main(args)
+
+    args.ood_dataset = "svhn"
+    args.method = "rot"
+    main(args)
