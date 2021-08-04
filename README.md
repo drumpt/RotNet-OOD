@@ -4,15 +4,18 @@ A Simplified Pytorch implementation of *Using Self-Supervised Learning Can Impro
 
 **The code supports only Multi-class OOD Detection experiment(in-dist: CIFAR-10, Out-of-dist: CIFAR-100/SVHN)** 
 
+- Command
+```
+python3 test.py
+```
 
-- Command 
-  - RotNet-OOD
-  
-    python test.py --method=rot --ood_dataset=cifar100
-  
-  - baseline
-  
-    python test.py --method=msp --ood_dataset=svhn
+- Result
+  - Metric : AUROC
+
+| Dataset \ Method | RotNet | MSP |
+|:---:|:---:|:---:|
+| CIFAR100 | 0.8310 | 0.7695 |
+| SVHN | 0.9755 | 0.8747 |
 
 - Reference
   - full code(by authors): https://github.com/hendrycks/ss-ood
